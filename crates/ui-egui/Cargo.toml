@@ -44,6 +44,9 @@ zbus = "=5.19.0"
 # Comment times in the user's own time zone (`local_time.rs`); the web app asks the browser.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 chrono = { version = "0.4.45", default-features = false, features = ["clock"] }
+
+# The update checker: not on Android, where the Play Store delivers updates.
+[target.'cfg(not(any(target_arch = "wasm32", target_os = "android")))'.dependencies]
 craft-update = { workspace = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
