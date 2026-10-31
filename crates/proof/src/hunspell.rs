@@ -146,6 +146,11 @@ pub fn find_in(dir: &Path, names: &[&str]) -> Option<(PathBuf, PathBuf)> {
 pub(crate) fn read_capped(p: &Path) -> Result<Vec<u8>, String> {
     use std::io::Read;
     let err = |e: std::io::Error| format!("{}: {e}", p.display());
+    // Refuse anything but a regular file before opening it: opening a directory fails on Windows,
+    // and opening a named pipe or a device can block.
+    if !std::fs::metadata(p).map_err(err)?.is_file() {
+        return Err(format!("{}: not a regular file", p.display()));
+    }
     let f = std::fs::File::open(p).map_err(err)?;
     let meta = f.metadata().map_err(err)?;
     if !meta.is_file() {
