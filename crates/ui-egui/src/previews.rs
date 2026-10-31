@@ -152,6 +152,9 @@ impl MathAtlas {
     }
 }
 
+/// A font the font list always offers, whether or not the system has it (see [`Previews::families`]).
+const ALWAYS_LISTED_FONT: &str = "Times New Roman";
+
 impl Previews {
     /// The font list: installed families, each by its name in the interface language when it has
     /// one (宋体 for SimSun in Chinese, #505), like Word's.
@@ -162,7 +165,9 @@ impl Previews {
             self.font_gen = generation;
             let db = wordcraft_fonts::FontDb::global();
             let mut f: Vec<String> = db.families_in(lang).into_iter().filter(|f| !f.starts_with('.')).collect();
-            for w in [wordcraft_doc::styles::BODY_FONT, wordcraft_doc::styles::HEADING_FONT] {
+            // Always listed, installed or not: the default fonts, and Times New Roman, which Word
+            // users pick everywhere. A missing one draws with its metric-compatible substitute.
+            for w in [wordcraft_doc::styles::BODY_FONT, wordcraft_doc::styles::HEADING_FONT, ALWAYS_LISTED_FONT] {
                 if !f.iter().any(|x| x == w) {
                     f.push(w.to_string());
                 }

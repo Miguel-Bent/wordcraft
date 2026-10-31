@@ -381,3 +381,11 @@ fn font_menu_entries_take_the_theme_text_colour() {
         assert_eq!(images, 1, "{theme:?}: the entry draws its rendered name");
     }
 }
+
+/// The font list always offers Times New Roman, installed or not: Word users pick it everywhere,
+/// and a missing one draws with its metric-compatible substitute.
+#[test]
+fn the_font_list_always_offers_times_new_roman() {
+    let mut previews = Previews::default();
+    assert!(previews.families().iter().any(|f| f == "Times New Roman"));
+}
