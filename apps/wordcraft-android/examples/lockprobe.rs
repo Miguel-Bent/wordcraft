@@ -1,9 +1,15 @@
 //! Diagnostic: what `File::try_lock` reports on this device (the recovery copy's lock).
 //! Usage: lockprobe <path>. Prints the outcome and the raw errno.
-use std::fs::OpenOptions;
-use std::os::unix::fs::OpenOptionsExt;
-
+#[cfg(not(unix))]
 fn main() {
+    println!("lockprobe runs on the Android device (Unix); nothing to probe here");
+}
+
+#[cfg(unix)]
+fn main() {
+    use std::fs::OpenOptions;
+    use std::os::unix::fs::OpenOptionsExt;
+
     let path = std::env::args().nth(1).unwrap_or_else(|| "/data/local/tmp/probe.lock".into());
     let file = OpenOptions::new().read(true).write(true).create(true).truncate(false).mode(0o600).open(&path);
     let file = match file {

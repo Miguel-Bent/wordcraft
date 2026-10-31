@@ -31,12 +31,8 @@ fn without_pdf_dates(bytes: &[u8]) -> Vec<u8> {
 }
 
 fn main() {
-    let documents: [(&str, fn() -> wordcraft_engine::doc::Document); 4] = [
-        ("sample", sample::sample_document),
-        ("letter", sample::letter),
-        ("resume", sample::resume),
-        ("report", sample::report),
-    ];
+    let documents: [(&str, fn() -> wordcraft_engine::doc::Document); 4] =
+        [("sample", sample::sample_document), ("letter", sample::letter), ("resume", sample::resume), ("report", sample::report)];
     for (name, make) in documents {
         let mut doc = make();
         // Fixed creation and modification dates: exports stamp the clock otherwise, so two runs
@@ -59,12 +55,7 @@ fn main() {
         println!("{name}\tpages\t{}", layout.pages.len());
         for (index, page) in layout.pages.iter().enumerate() {
             let rendered = render_page(&session.doc, page, 1.0, &RenderOptions::default());
-            println!(
-                "{name}\tpage\t{index}\t{}x{}\t{}",
-                rendered.width,
-                rendered.height,
-                fingerprint(&rendered.to_straight())
-            );
+            println!("{name}\tpage\t{index}\t{}x{}\t{}", rendered.width, rendered.height, fingerprint(&rendered.to_straight()));
         }
 
         for extension in ["docx", "odt", "rtf", "md", "txt", "html", "pdf"] {
