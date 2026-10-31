@@ -205,6 +205,12 @@ pub fn system_font_dirs() -> Vec<std::path::PathBuf> {
     if cfg!(target_arch = "wasm32") {
         return dirs;
     }
+    // Test hook for the PC-versus-phone parity check: `WORDCRAFT_FONT_DIRS` (paths separated as
+    // the OS separates PATH entries) replaces the platform folders, so both sides can scan the
+    // same fonts. Unset, nothing changes.
+    if let Some(overridden) = std::env::var_os("WORDCRAFT_FONT_DIRS") {
+        return std::env::split_paths(&overridden).collect();
+    }
     let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
     if cfg!(target_os = "macos") {
         dirs.extend(["/System/Library/Fonts", "/Library/Fonts"].map(Into::into));
@@ -227,6 +233,9 @@ pub fn system_font_dirs() -> Vec<std::path::PathBuf> {
         if let Some(l) = std::env::var_os("LOCALAPPDATA") {
             dirs.push(std::path::PathBuf::from(l).join("Microsoft\\Windows\\Fonts"));
         }
+    } else if cfg!(target_os = "android") {
+        // Android keeps the platform's fonts in its system partitions (no XDG or Flatpak folders).
+        dirs.extend(["/system/fonts", "/product/fonts", "/system_ext/fonts"].map(Into::into));
     } else {
         dirs.extend(["/usr/share/fonts", "/usr/local/share/fonts"].map(Into::into));
         if let Some(h) = &home {
