@@ -88,14 +88,21 @@ public class WordCraftActivity extends NativeActivity {
         if (resultCode != RESULT_OK || uris.isEmpty()) {
             return;
         }
+        // Keep the access the picker granted, so a later Save can write to the same file.
+        final int grants = data.getFlags() & (Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
         new Thread(() -> {
             ContentResolver resolver = getContentResolver();
             for (Uri uri : uris) {
+                try {
+                    resolver.takePersistableUriPermission(uri, grants);
+                } catch (SecurityException | IllegalArgumentException error) {
+                    // The provider keeps no permission: Save then asks for a location.
+                }
                 try (java.io.InputStream input = resolver.openInputStream(uri)) {
                     if (input == null) {
                         continue;
                     }
-                    nativeOnPicked(requestId, displayName(uri), readAll(input));
+                    nativeOnPicked(requestId, displayName(uri), readAll(input), uri.toString());
                 } catch (IOException error) {
                     // A file that can't be read is skipped; the app shows nothing for it.
                 }
@@ -109,6 +116,16 @@ public class WordCraftActivity extends NativeActivity {
             nativeOnSaved(requestId, STATUS_CANCELLED, "");
             return;
         }
+        writeTo(requestId, uri);
+    }
+
+    /** Called from Rust (UI thread): writes the bytes a save staged to the file the document was opened from. */
+    public void writeDocument(final int requestId, final String uri) {
+        writeTo(requestId, Uri.parse(uri));
+    }
+
+    /** Writes the staged bytes to {@code uri} on a background thread. A success reports the URI back. */
+    private void writeTo(final int requestId, final Uri uri) {
         new Thread(() -> {
             byte[] bytes = nativeTakeSaveBytes(requestId);
             if (bytes == null) {
@@ -121,7 +138,7 @@ public class WordCraftActivity extends NativeActivity {
                     return;
                 }
                 output.write(bytes);
-                nativeOnSaved(requestId, STATUS_SAVED, "");
+                nativeOnSaved(requestId, STATUS_SAVED, uri.toString());
             } catch (IOException error) {
                 String message = error.getMessage();
                 nativeOnSaved(requestId, STATUS_FAILED, message == null ? "the file could not be written" : message);
@@ -307,12 +324,12 @@ public class WordCraftActivity extends NativeActivity {
         });
     }
 
-    /** Implemented in Rust (platform.rs): a picked file's name and bytes, queued for the app. */
-    private static native void nativeOnPicked(int requestId, String name, byte[] bytes);
+    /** Implemented in Rust (platform.rs): a picked file's name, bytes and URI, queued for the app. */
+    private static native void nativeOnPicked(int requestId, String name, byte[] bytes, String uri);
 
     /** Implemented in Rust: the bytes a save staged, or null when there are none. */
     private static native byte[] nativeTakeSaveBytes(int requestId);
 
-    /** Implemented in Rust: how a save ended; {@code message} says why when it failed. */
+    /** Implemented in Rust: how a save ended; {@code message} is the written file's URI on success and the reason on failure. */
     private static native void nativeOnSaved(int requestId, int status, String message);
 }

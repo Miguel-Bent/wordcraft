@@ -9,7 +9,7 @@
 //! tickets are shared with the UI and are not `Send`.
 
 use std::cell::RefCell;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::mem::ManuallyDrop;
 use std::path::Path;
 use std::rc::Rc;
@@ -23,16 +23,30 @@ use winit::platform::android::activity::AndroidApp;
 use wordcraft_ui_egui::async_saves::{AsyncSaves, SaveOutcome};
 use wordcraft_ui_egui::{Inbox, Services};
 
-/// What the activity reported, waiting for the UI thread.
+/// What the activity reported, waiting for the UI thread. `uri` is set for a document picked to open
+/// (and, for a save, the URI the file was written to).
 enum Event {
-    Picked { name: String, bytes: Vec<u8> },
-    Saved { id: i32, outcome: SaveOutcome },
+    Picked { name: String, bytes: Vec<u8>, uri: Option<String> },
+    Saved { id: i32, outcome: SaveOutcome, uri: Option<String> },
+}
+
+/// A document the app has open, and the URI it was read from: a Save writes back to it.
+#[derive(Clone)]
+struct OpenedFile {
+    name: String,
+    uri: String,
 }
 
 /// Events from the activity's threads, applied on the UI thread.
 static EVENTS: Mutex<Vec<Event>> = Mutex::new(Vec::new());
 /// Bytes a save staged, keyed by request id, until the activity takes them.
 static PENDING_SAVES: Mutex<BTreeMap<i32, Vec<u8>>> = Mutex::new(BTreeMap::new());
+/// The document open in the app, if it was picked with a URI to write back to.
+static OPENED: Mutex<Option<OpenedFile>> = Mutex::new(None);
+/// Open requests made for a document (not a picture or a font): their picks carry a URI.
+static OPEN_DOCUMENTS: Mutex<BTreeSet<i32>> = Mutex::new(BTreeSet::new());
+/// Save requests that went through the system "save as" picker, by request id, with the name asked for.
+static PICKER_SAVES: Mutex<BTreeMap<i32, String>> = Mutex::new(BTreeMap::new());
 static NEXT_REQUEST: AtomicI32 = AtomicI32::new(1);
 /// The activity handle, set once at start-up, for calling back into Java.
 static ANDROID: OnceLock<AndroidApp> = OnceLock::new();
@@ -116,11 +130,15 @@ impl Platform {
     pub fn services(&self) -> Services {
         let saves = self.saves.clone();
         let tickets = self.tickets.clone();
+        let (host_saves, host_tickets) = (self.saves.clone(), self.tickets.clone());
         Services {
             inbox: Some(self.inbox.clone()),
             async_saves: Some(self.saves.clone()),
             open_async: Some(Box::new(|purpose: &str| {
                 let request = next_request();
+                if purpose == "document" {
+                    lock(&OPEN_DOCUMENTS).insert(request);
+                }
                 let mimes = mime_types(purpose);
                 let multiple = purpose == "font";
                 let result = with_activity(|env, activity| {
@@ -144,26 +162,18 @@ impl Platform {
             })),
             // Exports ask for a name; the picker decides where the file goes.
             pick_save: Some(Box::new(|name: &str| Some(name.to_string()))),
+            // Save writes back to the file the document was opened from, when the app still has it
+            // (no picker); Save As, and a document with no such file, ask the system picker.
+            host_save: Some(Box::new(move |name: &str, bytes: &[u8], save_as: bool| {
+                let opened = lock(&OPENED).clone();
+                match opened {
+                    Some(file) if !save_as && file.name == name => start_save(&host_saves, &host_tickets, name, bytes, Some(&file.uri)),
+                    _ => start_save(&host_saves, &host_tickets, name, bytes, None),
+                }
+            })),
             download: Some(Box::new(move |path: &str, bytes: &[u8]| {
                 let name = Path::new(path).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "document".to_string());
-                let request = next_request();
-                lock(&PENDING_SAVES).insert(request, bytes.to_vec());
-                tickets.borrow_mut().insert(request, saves.start());
-                with_activity(|env, activity| {
-                    let text = env.new_string(&name).map_err(|e| e.to_string())?;
-                    let mime = env.new_string(mime_for(&name)).map_err(|e| e.to_string())?;
-                    env.call_method(
-                        activity,
-                        "createDocument",
-                        "(ILjava/lang/String;Ljava/lang/String;)V",
-                        &[JValue::Int(request), JValue::Object(&text), JValue::Object(&mime)],
-                    )
-                    .map(|_| ())
-                    .map_err(|e| e.to_string())
-                })
-                .inspect_err(|_| {
-                    lock(&PENDING_SAVES).remove(&request);
-                })
+                start_save(&saves, &tickets, &name, bytes, None)
             })),
             clipboard_text: Some(Box::new(|| clipboard_string("clipboardText"))),
             clipboard_html: Some(Box::new(|| clipboard_string("clipboardHtml"))),
@@ -184,9 +194,19 @@ impl Platform {
         let events = std::mem::take(&mut *lock(&EVENTS));
         for event in events {
             match event {
-                Event::Picked { name, bytes } => lock(&self.inbox).push((name, bytes)),
-                Event::Saved { id, outcome } => {
+                Event::Picked { name, bytes, uri } => {
+                    if let Some(uri) = uri {
+                        *lock(&OPENED) = Some(OpenedFile { name: name.clone(), uri });
+                    }
+                    lock(&self.inbox).push((name, bytes));
+                }
+                Event::Saved { id, outcome, uri } => {
                     lock(&PENDING_SAVES).remove(&id);
+                    // A save through the picker made a new file: the next Save writes to that file.
+                    let picked = lock(&PICKER_SAVES).remove(&id);
+                    if let (Some(name), Some(uri), SaveOutcome::Saved) = (picked, uri, &outcome) {
+                        *lock(&OPENED) = Some(OpenedFile { name, uri });
+                    }
                     if let Some(ticket) = self.tickets.borrow_mut().remove(&id) {
                         self.saves.finish(ticket, outcome);
                     }
@@ -194,6 +214,47 @@ impl Platform {
             }
         }
     }
+}
+
+/// Starts a save: stages `bytes` for the activity, then writes them to `uri` when the document is
+/// open from one, or asks the system "save as" picker for a file named `name`. The returned error
+/// means nothing was started.
+fn start_save(
+    saves: &AsyncSaves,
+    tickets: &RefCell<BTreeMap<i32, u64>>,
+    name: &str,
+    bytes: &[u8],
+    uri: Option<&str>,
+) -> Result<(), String> {
+    let request = next_request();
+    lock(&PENDING_SAVES).insert(request, bytes.to_vec());
+    tickets.borrow_mut().insert(request, saves.start());
+    let result = with_activity(|env, activity| match uri {
+        Some(uri) => {
+            let uri = env.new_string(uri).map_err(|e| e.to_string())?;
+            env.call_method(activity, "writeDocument", "(ILjava/lang/String;)V", &[JValue::Int(request), JValue::Object(&uri)])
+                .map(|_| ())
+                .map_err(|e| e.to_string())
+        }
+        None => {
+            lock(&PICKER_SAVES).insert(request, name.to_string());
+            let text = env.new_string(name).map_err(|e| e.to_string())?;
+            let mime = env.new_string(mime_for(name)).map_err(|e| e.to_string())?;
+            env.call_method(activity, "createDocument", "(ILjava/lang/String;Ljava/lang/String;)V", &[
+                JValue::Int(request),
+                JValue::Object(&text),
+                JValue::Object(&mime),
+            ])
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+        }
+    });
+    if result.is_err() {
+        lock(&PENDING_SAVES).remove(&request);
+        lock(&PICKER_SAVES).remove(&request);
+        tickets.borrow_mut().remove(&request);
+    }
+    result
 }
 
 /// Calls a `String clipboard…()` method of the activity; `None` when it returns null or fails.
@@ -267,14 +328,15 @@ pub fn copy_text(text: &str) {
 
 // ---- Called by WordCraftActivity (Java threads) -------------------------------------------------
 
-/// A document the user picked: its name and bytes.
+/// A document the user picked: its name, bytes and URI.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_wordcraft_android_WordCraftActivity_nativeOnPicked<'local>(
     mut env: JNIEnv<'local>,
     _class: JClass<'local>,
-    _request: jint,
+    request: jint,
     name: JString<'local>,
     bytes: JByteArray<'local>,
+    uri: JString<'local>,
 ) {
     let name: String = match env.get_string(&name) {
         Ok(text) => text.into(),
@@ -283,8 +345,10 @@ pub extern "system" fn Java_wordcraft_android_WordCraftActivity_nativeOnPicked<'
             return;
         }
     };
+    // Only a document keeps its URI: a picture or a font is not the file the app saves to.
+    let uri = if lock(&OPEN_DOCUMENTS).contains(&request) { env.get_string(&uri).ok().map(Into::into) } else { None };
     match env.convert_byte_array(&bytes) {
-        Ok(bytes) => queue(Event::Picked { name, bytes }),
+        Ok(bytes) => queue(Event::Picked { name, bytes, uri }),
         Err(error) => log::error!("picked file can't be read: {error}"),
     }
 }
@@ -303,7 +367,7 @@ pub extern "system" fn Java_wordcraft_android_WordCraftActivity_nativeTakeSaveBy
     }
 }
 
-/// How a save ended. Failures carry the reason.
+/// How a save ended. A success carries the written file's URI; a failure carries the reason.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_wordcraft_android_WordCraftActivity_nativeOnSaved<'local>(
     mut env: JNIEnv<'local>,
@@ -312,13 +376,11 @@ pub extern "system" fn Java_wordcraft_android_WordCraftActivity_nativeOnSaved<'l
     status: jint,
     message: JString<'local>,
 ) {
-    let outcome = match status {
-        STATUS_SAVED => SaveOutcome::Saved,
-        STATUS_CANCELLED => SaveOutcome::Cancelled,
-        _ => {
-            let reason: String = env.get_string(&message).map(Into::into).unwrap_or_default();
-            SaveOutcome::Failed(reason)
-        }
+    let text: String = env.get_string(&message).map(Into::into).unwrap_or_default();
+    let (outcome, uri) = match status {
+        STATUS_SAVED => (SaveOutcome::Saved, (!text.is_empty()).then_some(text)),
+        STATUS_CANCELLED => (SaveOutcome::Cancelled, None),
+        _ => (SaveOutcome::Failed(text), None),
     };
-    queue(Event::Saved { id: request, outcome });
+    queue(Event::Saved { id: request, outcome, uri });
 }
