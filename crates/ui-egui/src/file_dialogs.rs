@@ -442,6 +442,17 @@ impl WordApp {
     pub(crate) fn print_pdf_dialog(&mut self) {
         let name = format!("{}.pdf", self.title_stem());
         let settings = self.ui.print.params();
+        // A host with its own save picker (the browser, the Android tablet app) takes the bytes
+        // and asks where they go. A bare name there would write the PDF to a relative path the
+        // host can't reach, and the print would vanish without a word.
+        if let Some(download) = &self.services.download {
+            let outcome = self.session.print_pdf(&settings).map_err(|e| e.to_string()).and_then(|(bytes, _)| download(&name, &bytes));
+            match outcome {
+                Ok(()) => self.status(crate::i18n::fmt(tl!("Exported {path}"), &[("path", &name)])),
+                Err(error) => self.status(crate::i18n::fmt(tl!("Couldn't download {name}: {error}"), &[("name", &name), ("error", &error)])),
+            }
+            return;
+        }
         let _ = self.ask_file(FileDialogRequest::Save { name, dir: None }, AfterPick::PrintPdf { settings });
     }
 

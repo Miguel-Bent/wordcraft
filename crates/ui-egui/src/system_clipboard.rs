@@ -44,6 +44,14 @@ pub(crate) fn fill(app: &mut WordApp, id: &str, params: &mut Value) -> Option<Re
         }
         o.insert("text".into(), Value::String(text));
     }
+    // A picture on the clipboard and no text: Ctrl+V inserts the picture, as Word does.
+    if id == "edit.paste"
+        && !o.contains_key("text")
+        && app.session.math.is_none()
+        && let Some(r) = paste_picture::paste(app)
+    {
+        return Some(r);
+    }
     // Keep Text Only needs nothing more; a caller that passed formats of its own (an agent, Paste
     // Special's OK) has them already.
     if id == "edit.pasteText" || ["html", "rtf", "picture"].iter().any(|k| o.contains_key(*k)) {
@@ -219,6 +227,18 @@ mod tests {
         // Choosing it in the dialog (or naming it) pastes the picture.
         let r = a.run("edit.pasteSpecial", json!({"as": "picture"})).unwrap();
         assert_eq!(r["pastedAs"], "picture");
+        assert_eq!(a.session.doc.media.len(), 1);
+    }
+
+    /// Ctrl+V of a copied picture (no text on the clipboard) inserts the picture.
+    #[test]
+    fn ctrl_v_of_a_copied_picture_inserts_it() {
+        let services = Services {
+            clipboard_picture: Some(Box::new(|| Some(ClipboardPicture::Pixels { width: 4, height: 4, rgba: vec![200; 64] }))),
+            ..Default::default()
+        };
+        let mut a = app(services);
+        a.run("edit.paste", json!({})).unwrap();
         assert_eq!(a.session.doc.media.len(), 1);
     }
 

@@ -4062,6 +4062,24 @@ fn web_downloads_that_drop_content_leave_the_document_unsaved() {
     }
 }
 
+/// Android and the browser: "Save these pages as PDF…" hands the PDF to the host's download,
+/// which asks where it goes. A bare name would write to a relative path the host can't reach.
+#[test]
+fn print_pdf_goes_through_the_host_download() {
+    let got = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let seen = got.clone();
+    let mut a = typed();
+    a.services.download = Some(Box::new(move |name: &str, bytes: &[u8]| {
+        seen.borrow_mut().push((name.to_string(), bytes.to_vec()));
+        Ok(())
+    }));
+    a.print_pdf_dialog();
+    let got = got.borrow();
+    assert_eq!(got.len(), 1);
+    assert!(got[0].0.ends_with(".pdf"), "{}", got[0].0);
+    assert!(got[0].1.starts_with(b"%PDF"));
+}
+
 /// Web inside a page that keeps the files: the app with `host_save` recording each file it
 /// is handed (name, Save As, size).
 fn host_app(fail: bool) -> (WordApp, std::rc::Rc<std::cell::RefCell<Vec<(String, bool, usize)>>>) {
