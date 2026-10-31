@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <application
+        android:label="WordCraft"
+        android:supportsRtl="true"
+        android:theme="@android:style/Theme.Material.Light.NoActionBar">
+
+        <!--
+          The interface is Rust: WordCraftActivity (a NativeActivity) loads libwordcraft_tablet.so and
+          calls its android_main; Java only handles the system file picker. stateAlwaysHidden keeps the on-screen keyboard down while an external
+          keyboard is in use; touch input (and the soft keyboard) comes in a later phase.
+        -->
+        <activity
+            android:name="wordcraft.android.WordCraftActivity"
+            android:exported="true"
+            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|screenLayout|density|uiMode"
+            android:windowSoftInputMode="stateAlwaysHidden">
+            <meta-data
+                android:name="android.app.lib_name"
+                android:value="wordcraft_tablet" />
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+
+</manifest>

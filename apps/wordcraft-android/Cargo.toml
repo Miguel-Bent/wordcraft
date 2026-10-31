@@ -1,0 +1,16 @@
+[package]
+name = "wordcraft-android"
+description = "Parity checks: the same engine script run on the PC and on Android, fingerprints compared"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+wordcraft-engine = { workspace = true }
+wordcraft-render = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }

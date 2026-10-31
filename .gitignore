@@ -8,3 +8,13 @@ plan/
 /.claude/
 /target-*/
 /craft-fonts/
+
+# Android: Gradle and Cargo outputs, the local SDK path, and the native library
+# that cargo-ndk builds (android/README.md)
+android/.gradle/
+android/.kotlin/
+android/build/
+android/app/build/
+android/local.properties
+android/app/src/main/jniLibs/
+*.apk

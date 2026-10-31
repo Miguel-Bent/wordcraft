@@ -1,0 +1,38 @@
+[package]
+name = "wordcraft-tablet"
+description = "WordCraft on Android tablets: the desktop interface (wordcraft-ui-egui) through eframe's Android runner"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+# cdylib: the library the Android activity loads (`android_main`).
+crate-type = ["cdylib"]
+
+[dependencies]
+wordcraft-engine = { workspace = true }
+wordcraft-ui-egui = { workspace = true }
+wordcraft-fonts = { workspace = true }
+wordcraft-proof = { workspace = true }
+serde_json = { workspace = true }
+eframe = { workspace = true, features = ["default_fonts", "wgpu", "android-native-activity"] }
+egui = { workspace = true }
+# AndroidApp comes from winit (eframe's Android backend), the same version eframe builds with.
+winit = "0.30"
+# Calls into the activity (file picker) and the callbacks it makes back into Rust.
+jni = "0.21"
+log = { workspace = true }
+# Sends the app's log lines to logcat (tag "wordcraft").
+android_logger = "0.14"
+
+# Deliberate exception to the workspace's `unsafe_code = "forbid"`: the Android entry point is
+# `#[unsafe(no_mangle)] fn android_main`, which the Android glue looks up by name. The crate has no
+# other `unsafe`. Every other lint still applies (see lib.rs).
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+cognitive_complexity = "deny"
+wildcard_imports = "deny"
+too_many_arguments = "deny"
