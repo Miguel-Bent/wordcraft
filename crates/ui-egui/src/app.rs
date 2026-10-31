@@ -201,6 +201,12 @@ impl WordApp {
         self.ui.start_screen
     }
 
+    /// Whether the document itself has the keyboard focus (its key presses are commands, not text
+    /// for a field). Platforms without egui's clipboard use it to tell a field from the document.
+    pub fn editing_document(&self, ctx: &egui::Context) -> bool {
+        self.canvas.widget_id.is_some_and(|(id, _)| ctx.memory(|memory| memory.has_focus(id)))
+    }
+
     /// Whether a document is open: false from a Start screen launch until the user creates or
     /// opens one (#1129).
     pub fn has_document(&self) -> bool {
