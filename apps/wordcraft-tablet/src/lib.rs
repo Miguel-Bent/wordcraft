@@ -2,6 +2,8 @@
 // `android_main` is the one export the Android glue looks up by name (`#[unsafe(no_mangle)]`),
 // and `set_var` is `unsafe` in this edition; both run once, before the UI starts.
 #![allow(unsafe_code)]
+// Android only: the crate is empty on other hosts, so `cargo clippy --workspace` can check the rest.
+#![cfg(target_os = "android")]
 //! WordCraft on Android tablets.
 //!
 //! Runs the same [`wordcraft_ui_egui::WordApp`] as the desktop app, through eframe's Android
@@ -66,9 +68,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use platform::Platform;
+use winit::platform::android::activity::AndroidApp;
 use wordcraft_engine::{Session, sample};
 use wordcraft_ui_egui::{Inbox, UiState, WordApp};
-use winit::platform::android::activity::AndroidApp;
 
 struct TabletApp {
     app: WordApp,
@@ -124,7 +126,8 @@ impl eframe::App for TabletApp {
         // egui has no clipboard on Android: its copies go to the system clipboard here.
         // Copies are output commands; taking them here keeps egui from handling them too.
         let copies: Vec<String> = ui.ctx().output_mut(|output| {
-            let (copies, rest): (Vec<_>, Vec<_>) = std::mem::take(&mut output.commands).into_iter().partition(|command| matches!(command, egui::OutputCommand::CopyText(_)));
+            let (copies, rest): (Vec<_>, Vec<_>) =
+                std::mem::take(&mut output.commands).into_iter().partition(|command| matches!(command, egui::OutputCommand::CopyText(_)));
             output.commands = rest;
             copies
                 .into_iter()
@@ -218,12 +221,7 @@ fn android_main(app: AndroidApp) {
             if let Some(dir) = &settings {
                 load_settings(&mut app, &creation.egui_ctx, dir);
             }
-            Ok(Box::new(TabletApp {
-                app,
-                platform,
-                settings,
-                saved_prefs: None,
-            }))
+            Ok(Box::new(TabletApp { app, platform, settings, saved_prefs: None }))
         }),
     );
     if let Err(error) = result {

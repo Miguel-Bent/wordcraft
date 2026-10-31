@@ -19,9 +19,9 @@ use std::sync::{Mutex, MutexGuard, OnceLock};
 use jni::objects::{JByteArray, JClass, JObject, JString, JValue};
 use jni::sys::{jbyteArray, jint};
 use jni::{JNIEnv, JavaVM};
+use winit::platform::android::activity::AndroidApp;
 use wordcraft_ui_egui::async_saves::{AsyncSaves, SaveOutcome};
 use wordcraft_ui_egui::{Inbox, Services};
-use winit::platform::android::activity::AndroidApp;
 
 /// What the activity reported, waiting for the UI thread.
 enum Event {
@@ -109,11 +109,7 @@ pub struct Platform {
 impl Platform {
     pub fn new(ctx: &egui::Context, inbox: Inbox) -> Self {
         *lock(&REPAINT) = Some(ctx.clone());
-        Self {
-            inbox,
-            saves: AsyncSaves::default(),
-            tickets: Rc::new(RefCell::new(BTreeMap::new())),
-        }
+        Self { inbox, saves: AsyncSaves::default(), tickets: Rc::new(RefCell::new(BTreeMap::new())) }
     }
 
     /// The host hooks the app calls: opening and saving through the system picker.
@@ -128,9 +124,7 @@ impl Platform {
                 let mimes = mime_types(purpose);
                 let multiple = purpose == "font";
                 let result = with_activity(|env, activity| {
-                    let array = env
-                        .new_object_array(mimes.len() as i32, "java/lang/String", JObject::null())
-                        .map_err(|e| e.to_string())?;
+                    let array = env.new_object_array(mimes.len() as i32, "java/lang/String", JObject::null()).map_err(|e| e.to_string())?;
                     for (index, mime) in mimes.iter().enumerate() {
                         let text = env.new_string(mime).map_err(|e| e.to_string())?;
                         env.set_object_array_element(&array, index as i32, text).map_err(|e| e.to_string())?;
@@ -151,10 +145,7 @@ impl Platform {
             // Exports ask for a name; the picker decides where the file goes.
             pick_save: Some(Box::new(|name: &str| Some(name.to_string()))),
             download: Some(Box::new(move |path: &str, bytes: &[u8]| {
-                let name = Path::new(path)
-                    .file_name()
-                    .map(|n| n.to_string_lossy().to_string())
-                    .unwrap_or_else(|| "document".to_string());
+                let name = Path::new(path).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "document".to_string());
                 let request = next_request();
                 lock(&PENDING_SAVES).insert(request, bytes.to_vec());
                 tickets.borrow_mut().insert(request, saves.start());
@@ -181,12 +172,8 @@ impl Platform {
                     .map(|types| types.lines().map(str::to_string).filter(|t| !t.is_empty()).collect())
                     .unwrap_or_default()
             })),
-            set_clipboard_html: Some(Box::new(|html: &str, text: &str, _mathml: &str| {
-                set_clipboard(html, text).is_ok()
-            })),
-            clipboard_picture: Some(Box::new(|| {
-                clipboard_image().map(wordcraft_ui_egui::paste_picture::encoded_picture)
-            })),
+            set_clipboard_html: Some(Box::new(|html: &str, text: &str, _mathml: &str| set_clipboard(html, text).is_ok())),
+            clipboard_picture: Some(Box::new(|| clipboard_image().map(wordcraft_ui_egui::paste_picture::encoded_picture))),
             print: Some(Box::new(|pdf: &[u8]| print_pdf(pdf))),
             ..Default::default()
         }
@@ -212,10 +199,7 @@ impl Platform {
 /// Calls a `String clipboard…()` method of the activity; `None` when it returns null or fails.
 fn clipboard_string(method: &str) -> Option<String> {
     with_activity(|env, activity| {
-        let value = env
-            .call_method(activity, method, "()Ljava/lang/String;", &[])
-            .and_then(|v| v.l())
-            .map_err(|e| e.to_string())?;
+        let value = env.call_method(activity, method, "()Ljava/lang/String;", &[]).and_then(|v| v.l()).map_err(|e| e.to_string())?;
         if value.is_null() {
             return Ok(None);
         }
@@ -234,10 +218,7 @@ pub fn clipboard_text() -> Option<String> {
 /// The picture on the system clipboard, as its encoded bytes (a copied image or picture file).
 fn clipboard_image() -> Option<Vec<u8>> {
     with_activity(|env, activity| {
-        let value = env
-            .call_method(activity, "clipboardImage", "()[B", &[])
-            .and_then(|v| v.l())
-            .map_err(|e| e.to_string())?;
+        let value = env.call_method(activity, "clipboardImage", "()[B", &[]).and_then(|v| v.l()).map_err(|e| e.to_string())?;
         if value.is_null() {
             return Ok(None);
         }
@@ -253,25 +234,16 @@ fn print_pdf(pdf: &[u8]) -> Result<(), String> {
     with_activity(|env, activity| {
         let bytes = env.byte_array_from_slice(pdf).map_err(|e| e.to_string())?;
         let name = env.new_string("WordCraft").map_err(|e| e.to_string())?;
-        env.call_method(
-            activity,
-            "printPdf",
-            "([BLjava/lang/String;)V",
-            &[JValue::Object(&bytes), JValue::Object(&name)],
-        )
-        .map(|_| ())
-        .map_err(|e| e.to_string())
+        env.call_method(activity, "printPdf", "([BLjava/lang/String;)V", &[JValue::Object(&bytes), JValue::Object(&name)])
+            .map(|_| ())
+            .map_err(|e| e.to_string())
     })
 }
 
 /// Puts text (and its HTML, when given) on the system clipboard.
 fn set_clipboard(html: &str, text: &str) -> Result<(), String> {
     with_activity(|env, activity| {
-        let html_value = if html.is_empty() {
-            JObject::null()
-        } else {
-            env.new_string(html).map_err(|e| e.to_string())?.into()
-        };
+        let html_value = if html.is_empty() { JObject::null() } else { env.new_string(html).map_err(|e| e.to_string())?.into() };
         let text_value = env.new_string(text).map_err(|e| e.to_string())?;
         env.call_method(
             activity,
