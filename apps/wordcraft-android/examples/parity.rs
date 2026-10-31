@@ -5,7 +5,7 @@
 //! Host:    cargo run -p wordcraft-android --example parity --release > host.txt
 //! Android: see scripts/parity-android.ps1
 
-use serde_json::json;
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use wordcraft_engine::{Session, io, sample};
 use wordcraft_render::{RenderOptions, render_page};
@@ -28,6 +28,20 @@ fn without_pdf_dates(bytes: &[u8]) -> Vec<u8> {
         }
     }
     out
+}
+
+/// Layout timings (`layoutMs`, `ms`) differ from run to run and say nothing about the result, so
+/// they are dropped from a command's result before it is fingerprinted.
+fn without_timings(value: &mut Value) {
+    match value {
+        Value::Object(map) => {
+            map.remove("layoutMs");
+            map.remove("ms");
+            map.values_mut().for_each(without_timings);
+        }
+        Value::Array(items) => items.iter_mut().for_each(without_timings),
+        _ => {}
+    }
 }
 
 fn main() {
@@ -68,5 +82,25 @@ fn main() {
                 Err(error) => println!("{name}\texport\t{extension}\terror\t{error}"),
             }
         }
+    }
+
+    // Every registered command, each in a fresh sample session with no parameters: whether it
+    // succeeds, its result, and the document's text afterwards must match on both sides.
+    let registry = wordcraft_engine::cmd::registry();
+    println!("commands\tcount\t{}", registry.all().len());
+    for spec in registry.all() {
+        let mut doc = sample::sample_document();
+        doc.core.created = "2024-01-01T00:00:00Z".to_string();
+        doc.core.modified = "2024-01-01T00:00:00Z".to_string();
+        let mut session = Session::new(doc);
+        let (status, result) = match session.run(spec.id, &json!({})) {
+            Ok(mut value) => {
+                without_timings(&mut value);
+                ("ok", value.to_string())
+            }
+            Err(error) => ("error", error.to_string()),
+        };
+        let text = io::save_bytes("doc.txt", &session.doc).map(|bytes| fingerprint(&bytes)).unwrap_or_else(|e| format!("error: {e}"));
+        println!("commands\t{}\t{status}\t{}\t{text}", spec.id, fingerprint(result.as_bytes()));
     }
 }
