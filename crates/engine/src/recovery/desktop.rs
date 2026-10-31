@@ -67,6 +67,24 @@ fn private_dir(path: &Path) -> io::Result<()> {
     }
     b.create(path)
 }
+/// Locks `file` exclusively without waiting. Android's standard library has no file locks
+/// (`File::try_lock` is `Unsupported` there), so it takes the same `flock` through `rustix`.
+#[cfg(target_os = "android")]
+fn try_lock_file(file: &File) -> Result<(), std::fs::TryLockError> {
+    use rustix::fs::{FlockOperation, flock};
+    use std::os::fd::AsFd;
+    match flock(file.as_fd(), FlockOperation::NonBlockingLockExclusive) {
+        Ok(()) => Ok(()),
+        Err(error) if error == rustix::io::Errno::WOULDBLOCK => Err(std::fs::TryLockError::WouldBlock),
+        Err(error) => Err(std::fs::TryLockError::Error(io::Error::from_raw_os_error(error.raw_os_error()))),
+    }
+}
+
+#[cfg(not(target_os = "android"))]
+fn try_lock_file(file: &File) -> Result<(), std::fs::TryLockError> {
+    file.try_lock()
+}
+
 fn private_file(path: &Path, exclusive: bool) -> io::Result<File> {
     let mut o = OpenOptions::new();
     o.read(true).write(true);
@@ -160,13 +178,13 @@ impl Store {
         // A process another part of the app (or a test) is starting holds the lock for a moment
         // (a forked child shares it until it execs): wait that out, but not a live owner.
         for _ in 0..LOCK_RETRIES {
-            match file.try_lock() {
+            match try_lock_file(&file) {
                 Ok(()) => return Ok(file),
                 Err(std::fs::TryLockError::WouldBlock) => std::thread::sleep(Duration::from_millis(10)),
-                Err(e) => return Err(format!("recovery copy is in use or cannot be locked: {e}")),
+                Err(e) => return Err(format!("recovery copy is in use or cannot be locked: {e:?}")),
             }
         }
-        file.try_lock().map_err(|e| format!("recovery copy is in use or cannot be locked: {e}"))?;
+        try_lock_file(&file).map_err(|e| format!("recovery copy is in use or cannot be locked: {e:?}"))?;
         Ok(file)
     }
     fn acquire(&mut self, id: &str) -> Result<(), String> {
