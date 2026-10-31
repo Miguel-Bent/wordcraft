@@ -10,6 +10,58 @@
 
 mod platform;
 
+/// Diagnostics for a frozen UI. The frame marks the phase it is in, and a watchdog logs when one
+/// phase outlasts [`STALL`]: the input dispatcher gives up on a window that doesn't answer a touch
+/// within 10 seconds, so a stall that long is a freeze the user sees. The log names the phase.
+mod stall {
+    use std::sync::{Mutex, PoisonError};
+    use std::time::{Duration, Instant};
+
+    const STALL: Duration = Duration::from_secs(3);
+
+    static PHASE: Mutex<Option<(&'static str, Instant)>> = Mutex::new(None);
+
+    /// Marks `phase` as the frame's current phase until the guard drops.
+    pub fn enter(phase: &'static str) -> Phase {
+        *PHASE.lock().unwrap_or_else(PoisonError::into_inner) = Some((phase, Instant::now()));
+        Phase
+    }
+
+    pub struct Phase;
+
+    impl Drop for Phase {
+        fn drop(&mut self) {
+            *PHASE.lock().unwrap_or_else(PoisonError::into_inner) = None;
+        }
+    }
+
+    /// Starts the watchdog thread, which logs a stall once and its end once.
+    pub fn watch() {
+        std::thread::spawn(|| {
+            // The start of the phase whose stall was logged.
+            let mut reported: Option<Instant> = None;
+            loop {
+                std::thread::sleep(Duration::from_millis(500));
+                let now = Instant::now();
+                let current = *PHASE.lock().unwrap_or_else(PoisonError::into_inner);
+                if let Some(stalled) = reported
+                    && current.map(|(_, since)| since) != Some(stalled)
+                {
+                    log::error!("UI resumed after {:.1}s", now.duration_since(stalled).as_secs_f32());
+                    reported = None;
+                }
+                if let Some((phase, since)) = current
+                    && reported.is_none()
+                    && now.duration_since(since) >= STALL
+                {
+                    log::error!("UI stalled in {phase} for {:.1}s", now.duration_since(since).as_secs_f32());
+                    reported = Some(since);
+                }
+            }
+        });
+    }
+}
+
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -29,6 +81,7 @@ struct TabletApp {
 
 impl eframe::App for TabletApp {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        let _phase = stall::enter("logic");
         // Files and save results the activity reported since the last frame.
         self.platform.apply_events();
         self.app.logic(ctx);
@@ -36,6 +89,7 @@ impl eframe::App for TabletApp {
     }
 
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
+        let _phase = stall::enter("raw input");
         // With clipboard shortcuts off (see `android_main`), Ctrl+C, Ctrl+X and Ctrl+V arrive as
         // keys. A text field (egui's own) needs the copy, cut and paste events the desktop sends;
         // the document doesn't: its shortcuts already run those commands from the key itself, and
@@ -65,6 +119,7 @@ impl eframe::App for TabletApp {
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        let _phase = stall::enter("ui");
         self.app.ui(ui);
         // egui has no clipboard on Android: its copies go to the system clipboard here.
         // Copies are output commands; taking them here keeps egui from handling them too.
@@ -137,6 +192,7 @@ fn load_settings(app: &mut WordApp, ctx: &egui::Context, dir: &Path) {
 #[unsafe(no_mangle)]
 fn android_main(app: AndroidApp) {
     android_logger::init_once(android_logger::Config::default().with_max_level(log::LevelFilter::Debug).with_tag("wordcraft"));
+    stall::watch();
     let settings = use_private_settings(&app);
     platform::set_activity(app.clone());
     let mut options = eframe::NativeOptions {
