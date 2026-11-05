@@ -21,10 +21,10 @@ egui = { workspace = true }
 # AndroidApp comes from winit (eframe's Android backend), the same version eframe builds with.
 winit = "0.30"
 # Calls into the activity (file picker) and the callbacks it makes back into Rust.
-jni = "0.21"
+jni = "0.22"
 log = { workspace = true }
 # Sends the app's log lines to logcat (tag "wordcraft").
-android_logger = "0.14"
+android_logger = "0.15"
 
 # Deliberate exception to the workspace's `unsafe_code = "forbid"`: the Android entry point is
 # `#[unsafe(no_mangle)] fn android_main`, which the Android glue looks up by name. The crate has no
